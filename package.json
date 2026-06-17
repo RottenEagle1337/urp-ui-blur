@@ -1,0 +1,21 @@
+{
+  "name": "com.rotteneagle.urp-ui-blur",
+  "version": "1.0.0",
+  "displayName": "URP UI Blur",
+  "description": "URP Render Graph Kawase blur for Screen Space Camera UI panels.",
+  "unity": "6000.0",
+  "dependencies": {
+    "com.unity.render-pipelines.universal": "17.0.0",
+    "com.unity.ugui": "2.0.0"
+  },
+  "keywords": [
+    "urp",
+    "blur",
+    "ui",
+    "kawase",
+    "render-graph"
+  ],
+  "author": {
+    "name": "RottenEagle"
+  }
+}
