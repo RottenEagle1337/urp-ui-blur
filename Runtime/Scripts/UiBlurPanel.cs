@@ -22,6 +22,8 @@ public class UiBlurPanel : MonoBehaviour
 
     public bool HideFromCapture => hideFromCapture;
 
+    public bool IsBlurVisible => image != null && image.color.a > 0.001f;
+
     private void Awake()
     {
         image = GetComponent<Image>();
