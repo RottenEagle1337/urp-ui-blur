@@ -227,7 +227,7 @@ without blur and a warning is logged. Enable Post Processing on the camera or di
 | Repository | Contents |
 |---|---|
 | **urp-ui-blur** | this package |
-| [urp-ui-blur-dev](https://github.com/RottenEagle1337/urp-ui-blur-dev) | development Unity project: Showcase, Basics and BlurTest scenes, README capture tools, the package as a submodule |
+| [urp-ui-blur-dev](https://github.com/RottenEagle1337/urp-ui-blur-dev) | development Unity project: Showcase, Basics and BlurTest scenes, the package as a submodule |
 
 ## Credits and license
 
