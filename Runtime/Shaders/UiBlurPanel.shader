@@ -148,10 +148,12 @@ Shader "RottenEagle/UI/Blur Panel"
 
             half3 SampleBlur(float2 uv)
             {
-                // Level k has a blur radius of about 2^k pixels. The authored strength maps to levels at the
-                // reference height, the resolution term keeps the radius constant in screen proportion.
+                // Level k has a blur radius of about 2^k pixels. Strength is linear in radius at the reference
+                // height (radius = 1 + strength * (2^maxLevels - 1)); the resolution term keeps the radius
+                // constant in screen proportion.
                 float levelCount = max(_UIBlurLodParams.z, 1.0);
-                float lod = clamp(_BlurStrength * _UIBlurLodParams.y + _UIBlurLodParams.x, 1.0, levelCount);
+                float radius = 1.0 + saturate(_BlurStrength) * (exp2(_UIBlurLodParams.y) - 1.0);
+                float lod = clamp(log2(radius) + _UIBlurLodParams.x, 1.0, levelCount);
 
                 int level = (int)floor(lod);
                 float blend = lod - level;

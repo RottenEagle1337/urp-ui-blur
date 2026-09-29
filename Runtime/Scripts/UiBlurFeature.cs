@@ -17,8 +17,8 @@ namespace RottenEagle
 
         private const string PyramidShaderName = "Hidden/RottenEagle/UiBlurPyramid";
 
-        [Tooltip("Pyramid levels at the reference height. _BlurStrength = 1 samples the last level " +
-                 "(blur radius about 2^levels pixels). One raster pass per level.")]
+        [Tooltip("Pyramid levels at the reference height. _BlurStrength = 1 has a radius of about " +
+                 "2^levels pixels. One raster pass per level.")]
         [Range(1, MaxLevels)]
         [SerializeField] private int maxBlurLevels = 5;
 
