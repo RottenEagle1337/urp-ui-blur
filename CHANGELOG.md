@@ -24,13 +24,14 @@ Breaking rewrite. The blur is now a UI material sampling a blur pyramid, similar
 - `RottenEagle/UI/Blur Panel` material (`Runtime/Materials/UiBlurPanel.mat`), compatible with `UI/Default`:
   sprite shape, sliced sprites, stencil `Mask`, `RectMask2D`, `CanvasGroup`, tint via `Image.color`.
 - `_BlurStrength` material property: blur radius per material instance, continuous, resolution independent.
-- Blur sorting layers: the pyramid is rebuilt before them, so panels blur the UI under them.
-- `GameObject/UI/Blur Group` and `GameObject/UI/Blur Panel` menu items.
-- Inspector buttons to fix the Transparent Layer Mask and to create the `UI Blur` sorting layer.
+- Hierarchy capture: panels blur the UI drawn before them in the hierarchy of the same canvas. The UI is drawn
+  into the half resolution pyramid level, blur panels write a depth mark that rejects the UI drawn after them.
+- `GameObject/UI/Blur Panel` menu item.
+- Inspector button to remove the UI layers from the Transparent Layer Mask.
 
 ### Changed
-- Per panel Kawase ping-pong replaced by one downsample pyramid (one raster pass per level) per blur sorting layer,
-  independent of the panel count.
+- Per panel Kawase ping-pong replaced by one downsample pyramid (one raster pass per level), independent of the
+  panel count.
 - UI of Screen Space Camera canvases is drawn by the feature after post processing.
 - Blur textures use `B10G11R11_UFloatPack32` when supported.
 

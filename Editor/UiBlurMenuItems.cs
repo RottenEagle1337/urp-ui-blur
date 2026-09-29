@@ -1,5 +1,6 @@
 using UnityEditor;
 using UnityEngine;
+using UnityEngine.SceneManagement;
 using UnityEngine.UI;
 
 namespace RottenEagle.Editor
@@ -7,39 +8,16 @@ namespace RottenEagle.Editor
     internal static class UiBlurMenuItems
     {
         private const int UiLayer = 5;
+        private const string PanelMaterialPath = "Packages/com.rotteneagle.urp-ui-blur/Runtime/Materials/UiBlurPanel.mat";
 
-        /// <summary>
-        /// Child group drawn above the UI blur boundary: panels inside blur the scene and the UI below.
-        /// </summary>
-        [MenuItem("GameObject/UI/Blur Group", false, 2100)]
-        private static void CreateBlurGroup(MenuCommand command)
-        {
-            int sortingLayerId = UiBlurEditorUtility.EnsureSortingLayer(UiBlurFeature.DefaultBlurSortingLayer);
-
-            GameObject group = CreateUiObject("Blur Group", command.context as GameObject,
-                typeof(Canvas), typeof(GraphicRaycaster), typeof(CanvasGroup));
-
-            var rectTransform = (RectTransform)group.transform;
-            rectTransform.anchorMin = Vector2.zero;
-            rectTransform.anchorMax = Vector2.one;
-            rectTransform.offsetMin = Vector2.zero;
-            rectTransform.offsetMax = Vector2.zero;
-
-            var canvas = group.GetComponent<Canvas>();
-            canvas.overrideSorting = true;
-            canvas.sortingLayerID = sortingLayerId;
-
-            Selection.activeGameObject = group;
-        }
-
-        [MenuItem("GameObject/UI/Blur Panel", false, 2101)]
+        [MenuItem("GameObject/UI/Blur Panel", false, 2100)]
         private static void CreateBlurPanel(MenuCommand command)
         {
             GameObject panel = CreateUiObject("Blur Panel", command.context as GameObject, typeof(Image));
             ((RectTransform)panel.transform).sizeDelta = new Vector2(400.0f, 300.0f);
 
             var image = panel.GetComponent<Image>();
-            image.material = UiBlurEditorUtility.LoadPanelMaterial();
+            image.material = AssetDatabase.LoadAssetAtPath<Material>(PanelMaterialPath);
             image.raycastTarget = true;
 
             Selection.activeGameObject = panel;
@@ -82,20 +60,24 @@ namespace RottenEagle.Editor
         /// <summary>First root canvas in Screen Space Camera mode, otherwise any root canvas.</summary>
         private static Canvas FindSceneCanvas()
         {
+            // Walks the active scene instead of FindObjectsByType, whose overloads differ between Unity 6 versions.
             Canvas fallback = null;
-            foreach (Canvas canvas in Object.FindObjectsByType<Canvas>(FindObjectsSortMode.None))
+            foreach (GameObject root in SceneManager.GetActiveScene().GetRootGameObjects())
             {
-                if (!canvas.isRootCanvas)
+                foreach (Canvas canvas in root.GetComponentsInChildren<Canvas>())
                 {
-                    continue;
-                }
+                    if (!canvas.isRootCanvas)
+                    {
+                        continue;
+                    }
 
-                if (canvas.renderMode == RenderMode.ScreenSpaceCamera)
-                {
-                    return canvas;
-                }
+                    if (canvas.renderMode == RenderMode.ScreenSpaceCamera)
+                    {
+                        return canvas;
+                    }
 
-                fallback ??= canvas;
+                    fallback ??= canvas;
+                }
             }
 
             return fallback;

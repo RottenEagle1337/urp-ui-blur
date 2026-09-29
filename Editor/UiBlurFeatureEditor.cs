@@ -27,24 +27,6 @@ namespace RottenEagle.Editor
                 }
             }
 
-            if (!feature.HierarchyCapture && feature.BlurSortingLayers.Count == 0)
-            {
-                EditorGUILayout.HelpBox(
-                    "No blur sorting layers: blur panels blur only the scene. Put the UI that should blur the UI " +
-                    $"below it on a sorting layer from the list (for example '{UiBlurFeature.DefaultBlurSortingLayer}').",
-                    MessageType.Info);
-
-                if (GUILayout.Button($"Use '{UiBlurFeature.DefaultBlurSortingLayer}' sorting layer"))
-                {
-                    int layerId = UiBlurEditorUtility.EnsureSortingLayer(UiBlurFeature.DefaultBlurSortingLayer);
-                    serializedObject.Update();
-                    SerializedProperty layers = serializedObject.FindProperty("blurSortingLayers");
-                    layers.InsertArrayElementAtIndex(layers.arraySize);
-                    layers.GetArrayElementAtIndex(layers.arraySize - 1).intValue = layerId;
-                    serializedObject.ApplyModifiedProperties();
-                }
-            }
-
             DrawDefaultInspector();
         }
 

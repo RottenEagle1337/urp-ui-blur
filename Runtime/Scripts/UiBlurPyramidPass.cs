@@ -10,13 +10,11 @@ using UnityEngine.Rendering.Universal;
 namespace RottenEagle
 {
     /// <summary>
-    /// Hierarchy capture: Down ½ → Capture UI into ½ → Down ¼ … → Draw UI.
-    /// Sorting layers: Draw UI [..B0) → Pyramid → Draw UI [B0..B1) → Pyramid → Draw UI [B1..].
-    /// Pass count: one raster pass per pyramid level and one UI draw pass per range.
+    /// Down ½ → Capture UI into ½ → Down ¼ … → Draw UI.
+    /// Capture UI merges with Down ½ into one native render pass: pyramid levels + 1 render passes in total.
     /// </summary>
     internal sealed class UiBlurPyramidPass : ScriptableRenderPass
     {
-        private const int MaxBlurLayers = 16;
         private const float DownsampleOffset = 0.5f;
 
         private static readonly int BlitTextureId = Shader.PropertyToID("_BlitTexture");
@@ -72,16 +70,13 @@ namespace RottenEagle
         private static readonly BaseRenderFunc<CapturePassData, RasterGraphContext> CaptureRenderFunc = ExecuteCapture;
 
         private readonly List<ShaderTagId> shaderTagList = new List<ShaderTagId>(ShaderTags);
-        private readonly int[] layerValues = new int[MaxBlurLayers];
         private readonly TextureHandle[] pyramid = new TextureHandle[UiBlurFeature.MaxLevels];
 
         private Material material;
-        private IReadOnlyList<int> blurSortingLayers;
         private int maxBlurLevels;
         private float referenceHeight;
         private LayerMask uiLayerMask;
         private bool supportStencilMasks;
-        private bool hierarchyCapture;
         private bool loggedDepthWarning;
 
         private sealed class DrawPassData
@@ -111,20 +106,16 @@ namespace RottenEagle
 
         public void Setup(
             Material pyramidMaterial,
-            IReadOnlyList<int> sortingLayers,
             int levels,
             float blurReferenceHeight,
             LayerMask layerMask,
-            bool useStencil,
-            bool captureHierarchy)
+            bool useStencil)
         {
             material = pyramidMaterial;
-            blurSortingLayers = sortingLayers;
             maxBlurLevels = Mathf.Clamp(levels, 1, UiBlurFeature.MaxLevels);
             referenceHeight = Mathf.Max(1.0f, blurReferenceHeight);
             uiLayerMask = layerMask;
             supportStencilMasks = useStencil;
-            hierarchyCapture = captureHierarchy;
         }
 
         public override void RecordRenderGraph(RenderGraph renderGraph, ContextContainer frameData)
@@ -164,42 +155,15 @@ namespace RottenEagle
             bool blurAllowed = material != null &&
                                (cameraData.cameraType == CameraType.Game || cameraData.cameraType == CameraType.VR);
 
-            if (blurAllowed && hierarchyCapture)
-            {
-                // One pyramid for all UI: UI drawn before a panel (in hierarchy order) is captured into the
-                // pyramid, UI drawn after it is rejected inside the panel shape by the depth mark.
-                int capturedLevels = AddPyramid(renderGraph, colorTexture, targetWidth, targetHeight, levelCount,
-                    renderingData, drawingSettings);
-                AddDrawPass(renderGraph, renderingData, drawingSettings, colorTexture, depthTexture, capturedLevels,
-                    screenParams, lodParams, short.MinValue, short.MaxValue);
-                return;
-            }
-
-            int layerCount = blurAllowed ? CollectLayers() : 0;
-            bool pyramidBeforeAllUi = blurAllowed && layerCount == 0;
-
-            int blurredLevels = 0;
-            if (pyramidBeforeAllUi)
-            {
-                blurredLevels = AddPyramid(renderGraph, colorTexture, targetWidth, targetHeight, levelCount);
-            }
-
-            int rangeStart = short.MinValue;
-            for (int layerIndex = 0; layerIndex < layerCount; layerIndex++)
-            {
-                int layerValue = layerValues[layerIndex];
-                if (layerValue > rangeStart)
-                {
-                    AddDrawPass(renderGraph, renderingData, drawingSettings, colorTexture, depthTexture, blurredLevels,
-                        screenParams, lodParams, rangeStart, layerValue - 1);
-                }
-
-                blurredLevels = AddPyramid(renderGraph, colorTexture, targetWidth, targetHeight, levelCount);
-                rangeStart = layerValue;
-            }
+            // One pyramid for all UI: UI drawn before a panel (in hierarchy order) is captured into the
+            // pyramid, UI drawn after it is rejected inside the panel shape by the depth mark.
+            int blurredLevels = blurAllowed
+                ? AddPyramid(renderGraph, colorTexture, targetWidth, targetHeight, levelCount, renderingData,
+                    drawingSettings)
+                : 0;
 
             AddDrawPass(renderGraph, renderingData, drawingSettings, colorTexture, depthTexture, blurredLevels,
-                screenParams, lodParams, rangeStart, short.MaxValue);
+                screenParams, lodParams);
         }
 
         private TextureHandle GetStencilAttachment(
@@ -236,52 +200,9 @@ namespace RottenEagle
             return depthTexture;
         }
 
-        /// <summary>Fills layerValues with the sorting layer values of valid blur layers, sorted and unique.</summary>
-        private int CollectLayers()
-        {
-            if (blurSortingLayers == null)
-            {
-                return 0;
-            }
-
-            int count = 0;
-            for (int index = 0; index < blurSortingLayers.Count && count < MaxBlurLayers; index++)
-            {
-                int sortingLayerId = blurSortingLayers[index];
-                if (!SortingLayer.IsValid(sortingLayerId))
-                {
-                    continue;
-                }
-
-                int value = SortingLayer.GetLayerValueFromID(sortingLayerId);
-
-                int insertIndex = count;
-                while (insertIndex > 0 && layerValues[insertIndex - 1] > value)
-                {
-                    insertIndex--;
-                }
-
-                if (insertIndex > 0 && layerValues[insertIndex - 1] == value)
-                {
-                    continue;
-                }
-
-                for (int shiftIndex = count; shiftIndex > insertIndex; shiftIndex--)
-                {
-                    layerValues[shiftIndex] = layerValues[shiftIndex - 1];
-                }
-
-                layerValues[insertIndex] = value;
-                count++;
-            }
-
-            return count;
-        }
-
         /// <summary>Downsample chain color → L1 → … → Ln into <see cref="pyramid"/>. Returns n.</summary>
         private int AddPyramid(RenderGraph renderGraph, TextureHandle colorTexture, int targetWidth, int targetHeight,
-            int levelCount, UniversalRenderingData captureRenderingData = null,
-            DrawingSettings captureDrawingSettings = default)
+            int levelCount, UniversalRenderingData renderingData, DrawingSettings drawingSettings)
         {
             GraphicsFormat format = GetBlurFormat();
             TextureHandle source = colorTexture;
@@ -308,9 +229,9 @@ namespace RottenEagle
                     builder.SetRenderFunc(DownRenderFunc);
                 }
 
-                if (level == 1 && captureRenderingData != null)
+                if (level == 1)
                 {
-                    AddCapturePass(renderGraph, captureRenderingData, captureDrawingSettings, destination,
+                    AddCapturePass(renderGraph, renderingData, drawingSettings, destination,
                         LevelSize(targetWidth, 1), LevelSize(targetHeight, 1));
                 }
 
@@ -367,13 +288,11 @@ namespace RottenEagle
             TextureHandle depthTexture,
             int blurredLevels,
             Vector4 screenParams,
-            Vector4 lodParams,
-            int lowerSortingValue,
-            int upperSortingValue)
+            Vector4 lodParams)
         {
             var filteringSettings = new FilteringSettings(RenderQueueRange.all, uiLayerMask)
             {
-                sortingLayerRange = new SortingLayerRange((short)lowerSortingValue, (short)upperSortingValue)
+                sortingLayerRange = SortingLayerRange.all
             };
 
             // UI always draws on top of the scene: depth test and write are disabled, stencil stays with the material.
@@ -401,7 +320,7 @@ namespace RottenEagle
                 passData.screenParams = screenParams;
                 passData.lodParams = lodParams;
 
-                // Without a pyramid yet, panels sample black; missing top levels repeat the last level.
+                // Without a pyramid (editor cameras), panels sample black; missing top levels repeat the last level.
                 TextureHandle fallback = renderGraph.defaultResources.blackTexture;
                 if (blurredLevels == 0)
                 {

@@ -1,4 +1,3 @@
-using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.Rendering;
 using UnityEngine.Rendering.Universal;
@@ -8,25 +7,15 @@ namespace RottenEagle
     /// <summary>
     /// Builds a blur pyramid of the camera color and draws Screen Space Camera UI after post processing.
     /// Graphics with the "RottenEagle/UI/Blur Panel" material sample the pyramid by their _BlurStrength.
-    /// Before every sorting layer in <see cref="BlurSortingLayers"/> the pyramid is rebuilt, so panels on that
-    /// layer blur the UI below it. With an empty list the pyramid is built once before all UI.
+    /// UI is captured into the pyramid in hierarchy order: a panel blurs the scene and the UI drawn before it,
+    /// UI drawn after it stays on top.
     /// Exclude <see cref="UiLayerMask"/> from the renderer Transparent Layer Mask, otherwise UI is drawn twice.
     /// </summary>
     public class UiBlurFeature : ScriptableRendererFeature
     {
         public const int MaxLevels = 7;
-        public const string DefaultBlurSortingLayer = "UI Blur";
 
         private const string PyramidShaderName = "Hidden/RottenEagle/UiBlurPyramid";
-
-        [Tooltip("Panels blur the UI drawn before them in the hierarchy, UI drawn after them stays on top. " +
-                 "Draws the UI a second time at half resolution. Disables Blur Sorting Layers.")]
-        [SerializeField] private bool hierarchyCapture = true;
-
-        [Tooltip("Sorting layers that start a new blur: panels on them blur the scene and all UI below. " +
-                 "Empty: panels blur only the scene.")]
-        [UiBlurSortingLayer]
-        [SerializeField] private List<int> blurSortingLayers = new List<int>();
 
         [Tooltip("Pyramid levels at the reference height. _BlurStrength = 1 samples the last level " +
                  "(blur radius about 2^levels pixels). One raster pass per level.")]
@@ -50,14 +39,6 @@ namespace RottenEagle
         private Material pyramidMaterial;
         private UiBlurPyramidPass pyramidPass;
 
-        public IReadOnlyList<int> BlurSortingLayers => blurSortingLayers;
-
-        public bool HierarchyCapture
-        {
-            get => hierarchyCapture;
-            set => hierarchyCapture = value;
-        }
-
         public LayerMask UiLayerMask => uiLayerMask;
 
         public override void Create()
@@ -79,8 +60,7 @@ namespace RottenEagle
             }
 
             pyramidPass.renderPassEvent = injectionPoint;
-            pyramidPass.Setup(pyramidMaterial, blurSortingLayers, maxBlurLevels, referenceHeight, uiLayerMask,
-                supportStencilMasks, hierarchyCapture);
+            pyramidPass.Setup(pyramidMaterial, maxBlurLevels, referenceHeight, uiLayerMask, supportStencilMasks);
             renderer.EnqueuePass(pyramidPass);
         }
 
