@@ -4,13 +4,11 @@ Shader "Hidden/RottenEagle/UiBlurDualKawase"
         #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
         #include "Packages/com.unity.render-pipelines.core/Runtime/Utilities/Blit.hlsl"
 
-        TEXTURE2D_X(_BlurMixTexture);
-
         // xy: source texel size, zw: unused
         float4 _BlurSourceTexelSize;
         // xy: min uv, zw: max uv of the valid source region (scissor + half texel)
         float4 _BlurSourceClamp;
-        // x: offset in source texels, y: mix between _BlurMixTexture (0) and blurred result (1)
+        // x: offset in source texels
         float4 _BlurParams;
 
         half3 SampleSource(float2 uv)
@@ -59,15 +57,6 @@ Shader "Hidden/RottenEagle/UiBlurDualKawase"
             UNITY_SETUP_STEREO_EYE_INDEX_POST_VERTEX(input);
             return half4(Upsample(input.texcoord), 1.0);
         }
-
-        // Last upsample step: blends the lightly blurred first downsample level with the full blur.
-        half4 FragUpMix(Varyings input) : SV_Target
-        {
-            UNITY_SETUP_STEREO_EYE_INDEX_POST_VERTEX(input);
-            half3 blurred = Upsample(input.texcoord);
-            half3 soft = SAMPLE_TEXTURE2D_X_LOD(_BlurMixTexture, sampler_LinearClamp, input.texcoord, 0).rgb;
-            return half4(lerp(soft, blurred, _BlurParams.y), 1.0);
-        }
     ENDHLSL
 
     SubShader
@@ -96,16 +85,6 @@ Shader "Hidden/RottenEagle/UiBlurDualKawase"
             HLSLPROGRAM
             #pragma vertex Vert
             #pragma fragment FragUp
-            ENDHLSL
-        }
-
-        Pass
-        {
-            Name "UiBlurUpMix"
-
-            HLSLPROGRAM
-            #pragma vertex Vert
-            #pragma fragment FragUpMix
             ENDHLSL
         }
     }

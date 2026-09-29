@@ -19,29 +19,32 @@ namespace RottenEagle
         private const int MaxBlurLayers = 16;
         private const int PassDown = 0;
         private const int PassUp = 1;
-        private const int PassUpMix = 2;
-        private const float MinStrength = 0.001f;
+        private const float MaxOffset = 3.0f;
 
         private static readonly int BlitTextureId = Shader.PropertyToID("_BlitTexture");
         private static readonly int BlitScaleBiasId = Shader.PropertyToID("_BlitScaleBias");
-        private static readonly int BlurMixTextureId = Shader.PropertyToID("_BlurMixTexture");
         private static readonly int BlurSourceTexelSizeId = Shader.PropertyToID("_BlurSourceTexelSize");
         private static readonly int BlurSourceClampId = Shader.PropertyToID("_BlurSourceClamp");
         private static readonly int BlurParamsId = Shader.PropertyToID("_BlurParams");
         private static readonly int UiBlurTextureId = Shader.PropertyToID("_UIBlurTexture");
         private static readonly int UiBlurScreenParamsId = Shader.PropertyToID("_UIBlurScreenParams");
 
-        private static readonly string[] DownPassNames =
+        // Explicit samplers: stable names in Frame Debugger and GPU timings in the Profiler.
+        private static readonly ProfilingSampler[] DownSamplers =
         {
-            "UI Blur Down 1/2", "UI Blur Down 1/4", "UI Blur Down 1/8",
-            "UI Blur Down 1/16", "UI Blur Down 1/32", "UI Blur Down 1/64"
+            new ProfilingSampler("UI Blur Down 1/2"), new ProfilingSampler("UI Blur Down 1/4"),
+            new ProfilingSampler("UI Blur Down 1/8"), new ProfilingSampler("UI Blur Down 1/16"),
+            new ProfilingSampler("UI Blur Down 1/32"), new ProfilingSampler("UI Blur Down 1/64")
         };
 
-        private static readonly string[] UpPassNames =
+        private static readonly ProfilingSampler[] UpSamplers =
         {
-            "UI Blur Up 1/2", "UI Blur Up 1/4", "UI Blur Up 1/8",
-            "UI Blur Up 1/16", "UI Blur Up 1/32", "UI Blur Up 1/64"
+            new ProfilingSampler("UI Blur Up 1/2"), new ProfilingSampler("UI Blur Up 1/4"),
+            new ProfilingSampler("UI Blur Up 1/8"), new ProfilingSampler("UI Blur Up 1/16"),
+            new ProfilingSampler("UI Blur Up 1/32"), new ProfilingSampler("UI Blur Up 1/64")
         };
+
+        private static readonly ProfilingSampler DrawSampler = new ProfilingSampler("UI Blur Draw UI");
 
         private static readonly string[] LevelTextureNames =
         {
@@ -49,8 +52,6 @@ namespace RottenEagle
             "_UIBlurLevel4", "_UIBlurLevel5", "_UIBlurLevel6"
         };
 
-        private const string DrawPassName = "UI Blur Draw UI";
-        private const string OutputTextureName = "_UIBlurTexture";
 
         private static readonly ShaderTagId[] ShaderTags =
         {
@@ -100,8 +101,6 @@ namespace RottenEagle
             public Material material;
             public int shaderPass;
             public TextureHandle source;
-            public TextureHandle mixSource;
-            public bool hasMixSource;
             public Vector4 sourceTexelSize;
             public Vector4 sourceClamp;
             public Vector4 blurParams;
@@ -383,7 +382,7 @@ namespace RottenEagle
                 isPassTagName = false
             };
 
-            using (IRasterRenderGraphBuilder builder = renderGraph.AddRasterRenderPass(DrawPassName, out DrawPassData passData))
+            using (IRasterRenderGraphBuilder builder = renderGraph.AddRasterRenderPass(DrawSampler.name, out DrawPassData passData, DrawSampler))
             {
                 passData.rendererList = renderGraph.CreateRendererList(rendererListParams);
                 passData.blurTexture = blurTexture;
@@ -411,8 +410,8 @@ namespace RottenEagle
             int targetWidth = colorDesc.width;
             int targetHeight = colorDesc.height;
 
-            float strength = UiBlur.GetLayerStrength(layer.sortingLayerId);
-            GetEffectiveLevels(layer, targetHeight, strength, out int levels, out float offset);
+            GetEffectiveLevels(layer, targetHeight, UiBlur.GetLayerStrength(layer.sortingLayerId),
+                out int levels, out float offset);
 
             Rect fullRect = new Rect(0.0f, 0.0f, targetWidth, targetHeight);
             bool useScissor = false;
@@ -433,58 +432,37 @@ namespace RottenEagle
             }
 
             GraphicsFormat format = GetBlurFormat();
-            TextureHandle output = CreateLevelTexture(renderGraph, targetWidth, targetHeight, 1, format, OutputTextureName);
-
-            if (levels == 1)
-            {
-                AddBlurPass(renderGraph, DownPassNames[0], PassDown, colorTexture, TextureHandle.nullHandle, output,
-                    targetWidth, targetHeight, 0, 1, fullRect, useScissor, offset, 1.0f);
-                return output;
-            }
 
             // Downsample chain: color -> L1 -> ... -> Ln.
             TextureHandle source = colorTexture;
-            int sourceLevel = 0;
-            TextureHandle firstLevel = TextureHandle.nullHandle;
             for (int level = 1; level <= levels; level++)
             {
                 TextureHandle destination = CreateLevelTexture(renderGraph, targetWidth, targetHeight, level, format,
                     LevelTextureNames[level - 1]);
-                AddBlurPass(renderGraph, DownPassNames[level - 1], PassDown, source, TextureHandle.nullHandle,
-                    destination, targetWidth, targetHeight, sourceLevel, level, fullRect, useScissor, offset, 1.0f);
-
-                if (level == 1)
-                {
-                    firstLevel = destination;
-                }
+                AddBlurPass(renderGraph, DownSamplers[level - 1], PassDown, source, destination,
+                    targetWidth, targetHeight, level - 1, level, fullRect, useScissor, offset);
 
                 levelTextures[level] = destination;
                 source = destination;
-                sourceLevel = level;
             }
 
-            // Upsample chain in place: Ln -> Ln-1 -> ... -> L2, then L2 -> output mixed with L1.
-            for (int level = levels; level > 2; level--)
+            // Upsample chain in place: Ln -> Ln-1 -> ... -> L1. L1 (half resolution) is the result.
+            for (int level = levels; level > 1; level--)
             {
-                TextureHandle destination = levelTextures[level - 1];
-                AddBlurPass(renderGraph, UpPassNames[level - 2], PassUp, levelTextures[level], TextureHandle.nullHandle,
-                    destination, targetWidth, targetHeight, level, level - 1, fullRect, useScissor, offset, 1.0f);
+                AddBlurPass(renderGraph, UpSamplers[level - 2], PassUp, levelTextures[level], levelTextures[level - 1],
+                    targetWidth, targetHeight, level, level - 1, fullRect, useScissor, offset);
             }
 
-            AddBlurPass(renderGraph, UpPassNames[0], PassUpMix, levelTextures[2], firstLevel, output,
-                targetWidth, targetHeight, 2, 1, fullRect, useScissor, offset, strength);
-
-            return output;
+            return levelTextures[1];
         }
 
         private readonly TextureHandle[] levelTextures = new TextureHandle[UiBlurLayerSettings.MaxLevels + 1];
 
         private void AddBlurPass(
             RenderGraph renderGraph,
-            string passName,
+            ProfilingSampler sampler,
             int shaderPass,
             TextureHandle source,
-            TextureHandle mixSource,
             TextureHandle destination,
             int targetWidth,
             int targetHeight,
@@ -492,8 +470,7 @@ namespace RottenEagle
             int destinationLevel,
             Rect fullRect,
             bool useScissor,
-            float offset,
-            float mix)
+            float offset)
         {
             int sourceWidth = LevelSize(targetWidth, sourceLevel);
             int sourceHeight = LevelSize(targetHeight, sourceLevel);
@@ -502,28 +479,22 @@ namespace RottenEagle
             Rect destinationRect = LevelRect(fullRect, destinationLevel,
                 LevelSize(targetWidth, destinationLevel), LevelSize(targetHeight, destinationLevel));
 
-            using (IRasterRenderGraphBuilder builder = renderGraph.AddRasterRenderPass(passName, out BlurPassData passData))
+            using (IRasterRenderGraphBuilder builder = renderGraph.AddRasterRenderPass(sampler.name, out BlurPassData passData, sampler))
             {
                 passData.material = material;
                 passData.shaderPass = shaderPass;
                 passData.source = source;
-                passData.mixSource = mixSource;
-                passData.hasMixSource = mixSource.IsValid();
                 passData.sourceTexelSize = new Vector4(1.0f / sourceWidth, 1.0f / sourceHeight, sourceWidth, sourceHeight);
                 passData.sourceClamp = new Vector4(
                     (sourceRect.xMin + 0.5f) / sourceWidth,
                     (sourceRect.yMin + 0.5f) / sourceHeight,
                     (sourceRect.xMax - 0.5f) / sourceWidth,
                     (sourceRect.yMax - 0.5f) / sourceHeight);
-                passData.blurParams = new Vector4(offset, mix, 0.0f, 0.0f);
+                passData.blurParams = new Vector4(offset, 0.0f, 0.0f, 0.0f);
                 passData.scissor = destinationRect;
                 passData.useScissor = useScissor;
 
                 builder.UseTexture(source);
-                if (passData.hasMixSource)
-                {
-                    builder.UseTexture(mixSource);
-                }
 
                 builder.SetRenderAttachment(destination, 0, AccessFlags.WriteAll);
                 builder.SetRenderFunc(BlurRenderFunc);
@@ -547,11 +518,6 @@ namespace RottenEagle
             // so one shared block is safe for every blur pass.
             propertyBlock.Clear();
             propertyBlock.SetTexture(BlitTextureId, (RTHandle)data.source);
-            if (data.hasMixSource)
-            {
-                propertyBlock.SetTexture(BlurMixTextureId, (RTHandle)data.mixSource);
-            }
-
             propertyBlock.SetVector(BlitScaleBiasId, FullScaleBias);
             propertyBlock.SetVector(BlurSourceTexelSizeId, data.sourceTexelSize);
             propertyBlock.SetVector(BlurSourceClampId, data.sourceClamp);
@@ -572,28 +538,20 @@ namespace RottenEagle
         }
 
         /// <summary>
-        /// Converts authored levels/offset (reference height) to the current target height:
-        /// whole octaves become extra or fewer levels, the remainder scales the offset.
+        /// Dual Kawase radius is proportional to 2^levels * (offset + 0.5). The authored radius is scaled by the
+        /// target height and the layer strength, then split back into the fewest levels that keep the offset
+        /// at or below the authored one. The radius changes continuously with strength and resolution.
         /// </summary>
         private void GetEffectiveLevels(in LayerEntry layer, int targetHeight, float strength, out int levels,
             out float offset)
         {
-            if (strength <= MinStrength)
-            {
-                levels = 1;
-                offset = 0.0f;
-                return;
-            }
+            float spread = layer.offset + 0.5f;
+            float radius = Mathf.Clamp01(strength) * (targetHeight / referenceHeight) * (1 << layer.levels) * spread;
 
-            float scale = targetHeight / referenceHeight;
-            int extraLevels = Mathf.RoundToInt(Mathf.Log(scale, 2.0f));
-            levels = Mathf.Clamp(layer.levels + extraLevels, 1, UiBlurLayerSettings.MaxLevels);
-            offset = layer.offset * scale / Mathf.Pow(2.0f, levels - layer.levels);
-
-            if (levels == 1)
-            {
-                offset *= strength;
-            }
+            levels = radius > spread
+                ? Mathf.Clamp(Mathf.CeilToInt(Mathf.Log(radius / spread, 2.0f) - 0.001f), 1, UiBlurLayerSettings.MaxLevels)
+                : 1;
+            offset = Mathf.Clamp(radius / (1 << levels) - 0.5f, 0.0f, MaxOffset);
         }
 
         /// <summary>Distance in full resolution pixels the blur chain reads around a pixel.</summary>
