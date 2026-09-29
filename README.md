@@ -155,7 +155,7 @@ public class BlurFade : MonoBehaviour
 
 ## Demo project
 
-[urp-ui-blur-demo](https://github.com/RottenEagle1337/urp-ui-blur-demo) is a Unity project with this package as
+[urp-ui-blur-dev](https://github.com/RottenEagle1337/urp-ui-blur-dev) is the development Unity project with this package as
 a submodule and three scenes:
 
 | | Scene | Shows |
@@ -227,7 +227,7 @@ without blur and a warning is logged. Enable Post Processing on the camera or di
 | Repository | Contents |
 |---|---|
 | **urp-ui-blur** | this package |
-| [urp-ui-blur-demo](https://github.com/RottenEagle1337/urp-ui-blur-demo) | demo Unity project: Showcase, Basics and BlurTest scenes, README capture tools, the package as a submodule |
+| [urp-ui-blur-dev](https://github.com/RottenEagle1337/urp-ui-blur-dev) | development Unity project: Showcase, Basics and BlurTest scenes, README capture tools, the package as a submodule |
 
 ## Credits and license
 
