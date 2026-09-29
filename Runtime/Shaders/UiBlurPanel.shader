@@ -41,7 +41,8 @@ Shader "RottenEagle/UI/Blur Panel"
 
         Cull Off
         Lighting Off
-        ZWrite Off
+        // Only used by the capture pass of UiBlurFeature (depth mark). The final UI pass overrides depth state.
+        ZWrite On
         ZTest [unity_GUIZTestMode]
         Blend SrcAlpha OneMinusSrcAlpha
         ColorMask [_ColorMask]
@@ -60,6 +61,8 @@ Shader "RottenEagle/UI/Blur Panel"
 
             #pragma multi_compile_local _ UNITY_UI_CLIP_RECT
             #pragma multi_compile_local _ UNITY_UI_ALPHACLIP
+            // Set globally by UiBlurFeature while UI is drawn into the blur pyramid.
+            #pragma multi_compile _ _UI_BLUR_CAPTURE
 
             struct appdata_t
             {
@@ -174,25 +177,60 @@ Shader "RottenEagle/UI/Blur Panel"
                 return OUT;
             }
 
-            fixed4 frag(v2f IN) : SV_Target
+            half GetAlpha(v2f IN)
             {
-                // SV_POSITION is in render target pixels, the pyramid was produced from the same
-                // render target, so no platform specific flip is required.
-                float2 screenUv = IN.vertex.xy * _UIBlurScreenParams.zw;
-                half3 blur = SampleBlur(screenUv);
-
                 half alpha = (tex2D(_MainTex, IN.texcoord) + _TextureSampleAdd).a * IN.color.a;
 
                 #ifdef UNITY_UI_CLIP_RECT
                 alpha *= UnityGet2DClipping(IN.worldPosition.xy, _ClipRect);
                 #endif
 
+                return alpha;
+            }
+
+            #ifdef _UI_BLUR_CAPTURE
+
+            struct CaptureOutput
+            {
+                fixed4 color : SV_Target;
+                float depth  : SV_Depth;
+            };
+
+            // Capture pass: no color, a nearest depth mark in the panel shape. UI drawn later fails the depth
+            // test there, so the pyramid holds only what is under the panel.
+            CaptureOutput frag(v2f IN)
+            {
+                clip(GetAlpha(IN) - 0.01);
+
+                CaptureOutput output;
+                output.color = fixed4(0, 0, 0, 0);
+                #if UNITY_REVERSED_Z
+                output.depth = 1.0;
+                #else
+                output.depth = 0.0;
+                #endif
+                return output;
+            }
+
+            #else
+
+            fixed4 frag(v2f IN) : SV_Target
+            {
+                half alpha = GetAlpha(IN);
+
                 #ifdef UNITY_UI_ALPHACLIP
                 clip(alpha - 0.001);
                 #endif
 
+                // SV_POSITION is in render target pixels, the pyramid was produced from the same
+                // render target, so no platform specific flip is required.
+                float2 screenUv = IN.vertex.xy * _UIBlurScreenParams.zw;
+                half3 blur = SampleBlur(screenUv);
+
                 return fixed4(blur * IN.color.rgb, alpha);
             }
+
+            #endif
             ENDCG
         }
     }

@@ -19,6 +19,10 @@ namespace RottenEagle
 
         private const string PyramidShaderName = "Hidden/RottenEagle/UiBlurPyramid";
 
+        [Tooltip("Panels blur the UI drawn before them in the hierarchy, UI drawn after them stays on top. " +
+                 "Draws the UI a second time at half resolution. Disables Blur Sorting Layers.")]
+        [SerializeField] private bool hierarchyCapture = true;
+
         [Tooltip("Sorting layers that start a new blur: panels on them blur the scene and all UI below. " +
                  "Empty: panels blur only the scene.")]
         [UiBlurSortingLayer]
@@ -48,6 +52,12 @@ namespace RottenEagle
 
         public IReadOnlyList<int> BlurSortingLayers => blurSortingLayers;
 
+        public bool HierarchyCapture
+        {
+            get => hierarchyCapture;
+            set => hierarchyCapture = value;
+        }
+
         public LayerMask UiLayerMask => uiLayerMask;
 
         public override void Create()
@@ -70,7 +80,7 @@ namespace RottenEagle
 
             pyramidPass.renderPassEvent = injectionPoint;
             pyramidPass.Setup(pyramidMaterial, blurSortingLayers, maxBlurLevels, referenceHeight, uiLayerMask,
-                supportStencilMasks);
+                supportStencilMasks, hierarchyCapture);
             renderer.EnqueuePass(pyramidPass);
         }
 

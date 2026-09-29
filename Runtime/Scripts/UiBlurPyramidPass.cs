@@ -10,8 +10,8 @@ using UnityEngine.Rendering.Universal;
 namespace RottenEagle
 {
     /// <summary>
-    /// Records UI draw ranges split by blur sorting layers, with a downsample pyramid before each range:
-    /// Draw UI [..B0) → Pyramid → Draw UI [B0..B1) → Pyramid → Draw UI [B1..].
+    /// Hierarchy capture: Down ½ → Capture UI into ½ → Down ¼ … → Draw UI.
+    /// Sorting layers: Draw UI [..B0) → Pyramid → Draw UI [B0..B1) → Pyramid → Draw UI [B1..].
     /// Pass count: one raster pass per pyramid level and one UI draw pass per range.
     /// </summary>
     internal sealed class UiBlurPyramidPass : ScriptableRenderPass
@@ -50,6 +50,11 @@ namespace RottenEagle
         };
 
         private static readonly ProfilingSampler DrawSampler = new ProfilingSampler("UI Blur Draw UI");
+        private static readonly ProfilingSampler CaptureSampler = new ProfilingSampler("UI Blur Capture UI");
+
+        // Enabled while UI is drawn into the pyramid: blur panels write a near depth mark instead of color,
+        // so UI drawn after a panel is rejected inside the panel shape.
+        private static readonly GlobalKeyword CaptureKeyword = GlobalKeyword.Create("_UI_BLUR_CAPTURE");
 
         private static readonly ShaderTagId[] ShaderTags =
         {
@@ -64,6 +69,7 @@ namespace RottenEagle
 
         private static readonly BaseRenderFunc<DrawPassData, RasterGraphContext> DrawRenderFunc = ExecuteDraw;
         private static readonly BaseRenderFunc<DownPassData, RasterGraphContext> DownRenderFunc = ExecuteDown;
+        private static readonly BaseRenderFunc<CapturePassData, RasterGraphContext> CaptureRenderFunc = ExecuteCapture;
 
         private readonly List<ShaderTagId> shaderTagList = new List<ShaderTagId>(ShaderTags);
         private readonly int[] layerValues = new int[MaxBlurLayers];
@@ -75,6 +81,7 @@ namespace RottenEagle
         private float referenceHeight;
         private LayerMask uiLayerMask;
         private bool supportStencilMasks;
+        private bool hierarchyCapture;
         private bool loggedDepthWarning;
 
         private sealed class DrawPassData
@@ -83,6 +90,11 @@ namespace RottenEagle
             public readonly TextureHandle[] levels = new TextureHandle[UiBlurFeature.MaxLevels];
             public Vector4 screenParams;
             public Vector4 lodParams;
+        }
+
+        private sealed class CapturePassData
+        {
+            public RendererListHandle rendererList;
         }
 
         private sealed class DownPassData
@@ -103,7 +115,8 @@ namespace RottenEagle
             int levels,
             float blurReferenceHeight,
             LayerMask layerMask,
-            bool useStencil)
+            bool useStencil,
+            bool captureHierarchy)
         {
             material = pyramidMaterial;
             blurSortingLayers = sortingLayers;
@@ -111,6 +124,7 @@ namespace RottenEagle
             referenceHeight = Mathf.Max(1.0f, blurReferenceHeight);
             uiLayerMask = layerMask;
             supportStencilMasks = useStencil;
+            hierarchyCapture = captureHierarchy;
         }
 
         public override void RecordRenderGraph(RenderGraph renderGraph, ContextContainer frameData)
@@ -149,6 +163,17 @@ namespace RottenEagle
             // Scene View and other editor cameras draw UI without blur.
             bool blurAllowed = material != null &&
                                (cameraData.cameraType == CameraType.Game || cameraData.cameraType == CameraType.VR);
+
+            if (blurAllowed && hierarchyCapture)
+            {
+                // One pyramid for all UI: UI drawn before a panel (in hierarchy order) is captured into the
+                // pyramid, UI drawn after it is rejected inside the panel shape by the depth mark.
+                int capturedLevels = AddPyramid(renderGraph, colorTexture, targetWidth, targetHeight, levelCount,
+                    renderingData, drawingSettings);
+                AddDrawPass(renderGraph, renderingData, drawingSettings, colorTexture, depthTexture, capturedLevels,
+                    screenParams, lodParams, short.MinValue, short.MaxValue);
+                return;
+            }
 
             int layerCount = blurAllowed ? CollectLayers() : 0;
             bool pyramidBeforeAllUi = blurAllowed && layerCount == 0;
@@ -255,7 +280,8 @@ namespace RottenEagle
 
         /// <summary>Downsample chain color → L1 → … → Ln into <see cref="pyramid"/>. Returns n.</summary>
         private int AddPyramid(RenderGraph renderGraph, TextureHandle colorTexture, int targetWidth, int targetHeight,
-            int levelCount)
+            int levelCount, UniversalRenderingData captureRenderingData = null,
+            DrawingSettings captureDrawingSettings = default)
         {
             GraphicsFormat format = GetBlurFormat();
             TextureHandle source = colorTexture;
@@ -282,11 +308,55 @@ namespace RottenEagle
                     builder.SetRenderFunc(DownRenderFunc);
                 }
 
+                if (level == 1 && captureRenderingData != null)
+                {
+                    AddCapturePass(renderGraph, captureRenderingData, captureDrawingSettings, destination,
+                        LevelSize(targetWidth, 1), LevelSize(targetHeight, 1));
+                }
+
                 pyramid[level - 1] = destination;
                 source = destination;
             }
 
             return levelCount;
+        }
+
+        /// <summary>Draws all UI into the first pyramid level with its own depth-stencil buffer.</summary>
+        private void AddCapturePass(
+            RenderGraph renderGraph,
+            UniversalRenderingData renderingData,
+            DrawingSettings drawingSettings,
+            TextureHandle levelTexture,
+            int width,
+            int height)
+        {
+            var filteringSettings = new FilteringSettings(RenderQueueRange.all, uiLayerMask)
+            {
+                sortingLayerRange = SortingLayerRange.all
+            };
+
+            // No state override: UI materials keep ZWrite Off / ZTest LEqual, blur panels write the depth mark.
+            var rendererListParams = new RendererListParams(renderingData.cullResults, drawingSettings, filteringSettings);
+
+            var depthDesc = new TextureDesc(width, height)
+            {
+                format = SystemInfo.GetGraphicsFormat(DefaultFormat.DepthStencil),
+                clearBuffer = false,
+                name = "_UIBlurCaptureDepth"
+            };
+            TextureHandle depthTexture = renderGraph.CreateTexture(depthDesc);
+
+            using (IRasterRenderGraphBuilder builder =
+                   renderGraph.AddRasterRenderPass(CaptureSampler.name, out CapturePassData passData, CaptureSampler))
+            {
+                passData.rendererList = renderGraph.CreateRendererList(rendererListParams);
+
+                builder.UseRendererList(passData.rendererList);
+                builder.SetRenderAttachment(levelTexture, 0, AccessFlags.Write);
+                builder.SetRenderAttachmentDepth(depthTexture, AccessFlags.WriteAll);
+                builder.AllowGlobalStateModification(true);
+                builder.SetRenderFunc(CaptureRenderFunc);
+            }
         }
 
         private void AddDrawPass(
@@ -374,6 +444,15 @@ namespace RottenEagle
             }
 
             cmd.DrawRendererList(data.rendererList);
+        }
+
+        private static void ExecuteCapture(CapturePassData data, RasterGraphContext context)
+        {
+            RasterCommandBuffer cmd = context.cmd;
+            cmd.ClearRenderTarget(RTClearFlags.DepthStencil, Color.clear, 1.0f, 0);
+            cmd.EnableKeyword(CaptureKeyword);
+            cmd.DrawRendererList(data.rendererList);
+            cmd.DisableKeyword(CaptureKeyword);
         }
 
         private static void ExecuteDown(DownPassData data, RasterGraphContext context)

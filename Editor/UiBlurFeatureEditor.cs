@@ -27,7 +27,7 @@ namespace RottenEagle.Editor
                 }
             }
 
-            if (feature.BlurSortingLayers.Count == 0)
+            if (!feature.HierarchyCapture && feature.BlurSortingLayers.Count == 0)
             {
                 EditorGUILayout.HelpBox(
                     "No blur sorting layers: blur panels blur only the scene. Put the UI that should blur the UI " +
