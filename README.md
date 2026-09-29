@@ -1,12 +1,14 @@
 # URP UI Blur
 
-Layered, material based background blur for **Screen Space Camera** UI in URP (Render Graph).
+Material based background blur for **Screen Space Camera** UI in URP (Render Graph), in the spirit of HDRP
+refraction: the renderer feature builds a blur pyramid of the frame, any UI graphic with the blur material samples it.
 
-- Blur is a regular UI material (`RottenEagle/UI/Blur Panel`) on any `Image`: sprite alpha defines the shape,
-  `Sliced` sprites, stencil `Mask`, `RectMask2D`, `CanvasGroup` and tint via `Image.color` work as usual.
-- Blur layers are **sorting layers**. A panel on blur layer N blurs the scene and all UI of the layers below N.
-  Panels of the same blur layer do not blur each other.
-- Cost depends on the number of blur layers, not on the number of panels: `2 * levels - 1` passes per layer.
+- Blur is a regular UI material (`RottenEagle/UI/Blur Panel`). Sprite alpha defines the shape; `Sliced` sprites,
+  stencil `Mask`, `RectMask2D`, `CanvasGroup` and tint via `Image.color` work as usual.
+- **Blur strength is a material property** (`_BlurStrength`, 0–1). Use material instances for different strengths.
+- Panels blur the scene and the UI under them, UI drawn after a panel stays sharp on top of it.
+  Panels do not blur each other.
+- No components. Cost does not depend on the number of panels: one raster pass per pyramid level (5 at 1080p).
 
 ## Requirements
 
@@ -20,62 +22,69 @@ Layered, material based background blur for **Screen Space Camera** UI in URP (R
 
 ## Setup
 
-1. **Sorting layers.** Create one sorting layer per blur layer, e.g. `UI_Base`, `UI_Blur1`, `UI_Blur2`, `UI_Top`.
-2. **Renderer.** On the URP Renderer Data:
-   - add **Ui Blur Feature**;
-   - add one entry to **Blur Layers** per blur sorting layer (`UI_Blur1`, `UI_Blur2`);
-   - remove the `UI` layer from **Transparent Layer Mask** (the feature inspector offers a button).
-     The feature draws UI itself, after post processing, split by blur layers.
-3. **Canvases.** `Render Mode = Screen Space - Camera`, `Render Camera` = the camera using this renderer,
-   GameObject layer `UI`, `Sorting Layer` = the layer the canvas belongs to.
-4. **Panels.** On an `Image`:
-   - set **Material** to `Packages/com.rotteneagle.urp-ui-blur/Runtime/Materials/UiBlurPanel.mat`;
-   - add **Ui Blur Panel** (reports the panel rect, lets the feature skip empty layers and limit the blur area).
+1. **Renderer.** Add **Ui Blur Feature** to the URP Renderer Data. In the feature inspector:
+   - press **Remove UI layers from Transparent Layer Mask** (the feature draws UI itself, after post processing);
+   - press **Use 'UI Blur' sorting layer** if panels must blur UI under them (see below).
+2. **Canvas.** `Render Mode = Screen Space - Camera`, `Render Camera` = the camera using this renderer, layer `UI`.
+3. **Panels.** **GameObject → UI → Blur Panel**, or set the material of any `Image` to
+   `Packages/com.rotteneagle.urp-ui-blur/Runtime/Materials/UiBlurPanel.mat` (or an instance of it).
 
-Text and images after the panel in the same canvas are drawn on top of the blur and stay sharp.
+### Blurring UI under the panels
+
+Unity renders a canvas as one unit, so the point where the frame is captured has to be a canvas boundary.
+Put the UI that holds blur panels into a **blur group**: **GameObject → UI → Blur Group** creates a child object
+with a nested `Canvas` (override sorting, sorting layer `UI Blur`), `GraphicRaycaster` and `CanvasGroup`.
+
+```
+Canvas (Screen Space - Camera)
+├─ Background          ← HUD, world labels, … : blurred under the panels
+└─ Blur Group          ← nested Canvas on sorting layer "UI Blur"
+   ├─ Panel (blur material, strength 0.6)
+   │  └─ Text          ← sharp, on top of the blur
+   └─ Panel (blur material instance, strength 1.0)
+```
+
+Without blur sorting layers in the feature, the pyramid is built once before all UI: panels blur only the scene.
 
 ## Ui Blur Feature
 
 | Setting | Default | Role |
 |---|---|---|
+| Blur Sorting Layers | empty | The pyramid is rebuilt before each of these sorting layers |
+| Max Blur Levels | 5 | Pyramid levels at the reference height, `_BlurStrength = 1` samples the last one (radius ≈ 2^levels px) |
+| Reference Height | 1080 | The blur radius scales with the camera target height |
 | Ui Layer Mask | `UI` | Unity layers of the UI drawn by the feature |
-| Injection Point | After Rendering Post Processing | UI is not affected by bloom, tonemapping, etc. |
-| Blur Layers | — | Sorting layer, `Levels` (1–6) and `Offset` per blur layer |
-| Reference Height | 1080 | Blur radius scales with the camera target height |
-| Skip Layers Without Panels | on | No blur work for a layer without a visible `UiBlurPanel` |
-| Limit To Panel Bounds | on | Scissor the blur to the bounds of the visible panels (+ kernel reach) |
 | Support Stencil Masks | on | Binds the camera depth-stencil while drawing UI (needed for `Mask`) |
+| Injection Point | After Rendering Post Processing | UI is not affected by bloom, tonemapping, etc. |
 
-Blur radius ≈ `2^levels * (offset + 0.5)` pixels at the reference height. Prefer more levels over large offsets.
+## Blur Panel material
 
-## Runtime API
+| Property | Role |
+|---|---|
+| `_BlurStrength` | 0–1, blur radius ≈ `2^(strength * Max Blur Levels)` px at the reference height |
+| `_Color` | Tint, multiplied with `Image.color` |
 
-```csharp
-UiBlur.SetLayerStrength("UI_Blur1", 0.5f); // 0..1, scales the blur radius continuously
-UiBlur.GetLayerStrength("UI_Blur1");
-UiBlur.ResetLayerStrengths();
-```
-
-Lower strength uses fewer passes. Values live in memory, the renderer asset is not modified.
+Animate the strength with `material.SetFloat("_BlurStrength", value)` on a material instance.
+Different materials break UI batching, keep the number of distinct strengths small.
 
 ## How it works
 
 ```
 Opaques → Skybox → Transparents (without UI layer) → Post processing
-Draw UI [sorting layers below first blur layer]        merged with the post processing pass when possible
-Blur layer 1: Down ½ → Down ¼ → … → Up ½              → _UIBlurTexture
-Draw UI [blur layer 1 .. blur layer 2)
-Blur layer 2: …                                        → _UIBlurTexture
-Draw UI [blur layer 2 .. ∞)
+Draw UI [below 'UI Blur']             merged with the post processing pass when possible
+Pyramid: Down ½ → ¼ → ⅛ → 1/16 → 1/32 _UIBlurLevel1..7
+Draw UI ['UI Blur' and above]         panels sample the pyramid
 ```
 
-- Dual Kawase: downsample 5 taps, upsample 8 taps, result at half resolution.
-- All passes are raster passes, textures have fixed sizes (stable Render Graph pool), no per-frame GC allocations.
-- The panel shader samples `_UIBlurTexture` with `SV_Position`, no platform specific UV flips.
+- Kawase downsample (5 taps) per level. The panel shader picks the two levels around its strength and samples
+  them with cubic B-spline filtering (4 bilinear taps each), so the radius changes continuously.
+- Raster passes only, fixed texture sizes (stable Render Graph pool), no per-frame GC allocations.
+- The panel shader samples the pyramid with `SV_Position`, no platform specific UV flips.
 - Scene View, Preview and Reflection cameras draw UI without blur.
 
 ## Limitations
 
-- Only Screen Space Camera canvases. Screen Space Overlay UI is drawn by URP after the camera and cannot be split.
+- Only Screen Space Camera canvases. Screen Space Overlay UI is drawn by URP after the camera (it is fine for
+  a HUD that must stay on top and unblurred).
 - UI drawn by the feature ignores scene depth (always on top of the scene).
-- A panel on a sorting layer below the first blur layer has no blur source (black).
+- The pyramid is built every frame, also when no panel is visible.

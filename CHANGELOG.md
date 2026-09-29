@@ -18,26 +18,25 @@
 - Optimized blur rendering by skipping fully transparent panels.
 ## [2.0.0] - 2026-09-29
 
-Breaking rewrite. The blur is now a UI material and works in layers.
+Breaking rewrite. The blur is now a UI material sampling a blur pyramid, similar to HDRP refraction.
 
 ### Added
 - `RottenEagle/UI/Blur Panel` material (`Runtime/Materials/UiBlurPanel.mat`), compatible with `UI/Default`:
   sprite shape, sliced sprites, stencil `Mask`, `RectMask2D`, `CanvasGroup`, tint via `Image.color`.
-- Blur layers based on sorting layers: a panel blurs the scene and all UI of lower blur layers.
-- Per layer settings (`levels`, `offset`), resolution independent radius (`referenceHeight`).
-- `UiBlur.SetLayerStrength` runtime API with continuous radius scaling.
-- Scissor to visible panel bounds and skipping of layers without visible panels.
-- Inspector warning and fix button when the `UI` layer is still in the Transparent Layer Mask.
+- `_BlurStrength` material property: blur radius per material instance, continuous, resolution independent.
+- Blur sorting layers: the pyramid is rebuilt before them, so panels blur the UI under them.
+- `GameObject/UI/Blur Group` and `GameObject/UI/Blur Panel` menu items.
+- Inspector buttons to fix the Transparent Layer Mask and to create the `UI Blur` sorting layer.
 
 ### Changed
-- Dual Kawase blur (5 / 8 taps) instead of per panel Kawase ping-pong. `2 * levels - 1` raster passes per layer,
+- Per panel Kawase ping-pong replaced by one downsample pyramid (one raster pass per level) per blur sorting layer,
   independent of the panel count.
 - UI of Screen Space Camera canvases is drawn by the feature after post processing.
-- `UiBlurPanel` only reports the panel rect and sorting layer, it no longer hides or draws the `Image`.
 - Blur textures use `B10G11R11_UFloatPack32` when supported.
 
 ### Removed
-- `hideFromCapture`, the panel composite pass, `Custom/UiBlurKawase` and `Custom/UiBlurPanelBlit` shaders.
+- `UiBlurPanel` and `UiBlurPanelRegistry` components, `hideFromCapture`, the panel composite pass,
+  `Custom/UiBlurKawase` and `Custom/UiBlurPanelBlit` shaders.
 
 ### Fixed
 - Blur parameters were set on the shared material inside the render function, so every iteration used the last value.

@@ -1,11 +1,12 @@
-// UI/Default compatible shader that fills the graphic with the blurred background of its blur layer.
-// Shape comes from the sprite alpha, tint and opacity from the Graphic color (vertex color).
+// UI/Default compatible shader that fills the graphic with the blurred background (UiBlurFeature pyramid).
+// Shape comes from the sprite alpha, tint and opacity from the Graphic color, blur radius from _BlurStrength.
 Shader "RottenEagle/UI/Blur Panel"
 {
     Properties
     {
         [PerRendererData] _MainTex ("Sprite Texture", 2D) = "white" {}
         _Color ("Tint", Color) = (1,1,1,1)
+        _BlurStrength ("Blur Strength", Range(0, 1)) = 1
 
         _StencilComp ("Stencil Comparison", Float) = 8
         _Stencil ("Stencil ID", Float) = 0
@@ -52,7 +53,7 @@ Shader "RottenEagle/UI/Blur Panel"
             CGPROGRAM
             #pragma vertex vert
             #pragma fragment frag
-            #pragma target 2.0
+            #pragma target 3.0
 
             #include "UnityCG.cginc"
             #include "UnityUI.cginc"
@@ -83,10 +84,83 @@ Shader "RottenEagle/UI/Blur Panel"
             float4 _ClipRect;
             float4 _MainTex_ST;
 
-            // Set by UiBlurFeature per blur layer.
-            sampler2D _UIBlurTexture;
+            float _BlurStrength;
+
+            // Set by UiBlurFeature before each UI range: pyramid levels 1..7 (1/2 .. 1/128 resolution).
+            sampler2D _UIBlurLevel1;
+            sampler2D _UIBlurLevel2;
+            sampler2D _UIBlurLevel3;
+            sampler2D _UIBlurLevel4;
+            sampler2D _UIBlurLevel5;
+            sampler2D _UIBlurLevel6;
+            sampler2D _UIBlurLevel7;
             // xy: camera target size in pixels, zw: 1 / size
             float4 _UIBlurScreenParams;
+            // x: log2(target height / reference height), y: authored max levels, z: available levels
+            float4 _UIBlurLodParams;
+
+            // Cubic B-spline filtering with 4 bilinear taps: smooth magnification of low resolution levels.
+            half3 SampleBicubic(sampler2D tex, float2 uv, float2 size)
+            {
+                float2 texel = uv * size - 0.5;
+                float2 index = floor(texel);
+                float2 f = texel - index;
+                float2 f2 = f * f;
+                float2 f3 = f2 * f;
+
+                float2 w0 = (1.0 / 6.0) * (-f3 + 3.0 * f2 - 3.0 * f + 1.0);
+                float2 w1 = (1.0 / 6.0) * (3.0 * f3 - 6.0 * f2 + 4.0);
+                float2 w2 = (1.0 / 6.0) * (-3.0 * f3 + 3.0 * f2 + 3.0 * f + 1.0);
+                float2 w3 = (1.0 / 6.0) * f3;
+
+                float2 g0 = w0 + w1;
+                float2 g1 = w2 + w3;
+                float2 invSize = 1.0 / size;
+                float2 uv0 = (index - 0.5 + w1 / g0) * invSize;
+                float2 uv1 = (index + 1.5 + w3 / g1) * invSize;
+
+                half3 c00 = tex2Dlod(tex, float4(uv0.x, uv0.y, 0, 0)).rgb;
+                half3 c10 = tex2Dlod(tex, float4(uv1.x, uv0.y, 0, 0)).rgb;
+                half3 c01 = tex2Dlod(tex, float4(uv0.x, uv1.y, 0, 0)).rgb;
+                half3 c11 = tex2Dlod(tex, float4(uv1.x, uv1.y, 0, 0)).rgb;
+
+                return g0.y * (g0.x * c00 + g1.x * c10) + g1.y * (g0.x * c01 + g1.x * c11);
+            }
+
+            half3 SampleLevel(int level, float2 uv)
+            {
+                float2 size = max(1.0, floor(_UIBlurScreenParams.xy / exp2(level)));
+
+                [branch] switch (level)
+                {
+                    case 1: return SampleBicubic(_UIBlurLevel1, uv, size);
+                    case 2: return SampleBicubic(_UIBlurLevel2, uv, size);
+                    case 3: return SampleBicubic(_UIBlurLevel3, uv, size);
+                    case 4: return SampleBicubic(_UIBlurLevel4, uv, size);
+                    case 5: return SampleBicubic(_UIBlurLevel5, uv, size);
+                    case 6: return SampleBicubic(_UIBlurLevel6, uv, size);
+                    default: return SampleBicubic(_UIBlurLevel7, uv, size);
+                }
+            }
+
+            half3 SampleBlur(float2 uv)
+            {
+                // Level k has a blur radius of about 2^k pixels. The authored strength maps to levels at the
+                // reference height, the resolution term keeps the radius constant in screen proportion.
+                float levelCount = max(_UIBlurLodParams.z, 1.0);
+                float lod = clamp(_BlurStrength * _UIBlurLodParams.y + _UIBlurLodParams.x, 1.0, levelCount);
+
+                int level = (int)floor(lod);
+                float blend = lod - level;
+
+                half3 color = SampleLevel(level, uv);
+                [branch] if (blend > 0.001)
+                {
+                    color = lerp(color, SampleLevel(min(level + 1, (int)levelCount), uv), blend);
+                }
+
+                return color;
+            }
 
             v2f vert(appdata_t v)
             {
@@ -102,10 +176,10 @@ Shader "RottenEagle/UI/Blur Panel"
 
             fixed4 frag(v2f IN) : SV_Target
             {
-                // SV_POSITION is in render target pixels, the blur texture was produced from the same
+                // SV_POSITION is in render target pixels, the pyramid was produced from the same
                 // render target, so no platform specific flip is required.
                 float2 screenUv = IN.vertex.xy * _UIBlurScreenParams.zw;
-                half3 blur = tex2D(_UIBlurTexture, screenUv).rgb;
+                half3 blur = SampleBlur(screenUv);
 
                 half alpha = (tex2D(_MainTex, IN.texcoord) + _TextureSampleAdd).a * IN.color.a;
 
