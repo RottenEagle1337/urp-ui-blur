@@ -47,6 +47,23 @@ namespace RottenEagle.Editor
 
         private static GameObject CreateUiObject(string name, GameObject parent, params System.Type[] components)
         {
+            // The main menu passes no context: fall back to the selection, then to any canvas in the scene.
+            if (parent == null)
+            {
+                parent = Selection.activeGameObject;
+            }
+
+            if (parent == null || parent.GetComponentInParent<Canvas>() == null)
+            {
+                Canvas sceneCanvas = FindSceneCanvas();
+                parent = sceneCanvas != null ? sceneCanvas.gameObject : parent;
+            }
+
+            if (parent == null || parent.GetComponentInParent<Canvas>() == null)
+            {
+                Debug.LogWarning($"'{name}' was created without a parent canvas. Move it under a Screen Space Camera canvas.");
+            }
+
             var gameObject = new GameObject(name, typeof(RectTransform)) { layer = UiLayer };
             foreach (System.Type component in components)
             {
@@ -60,6 +77,28 @@ namespace RottenEagle.Editor
 
             Undo.RegisterCreatedObjectUndo(gameObject, "Create " + name);
             return gameObject;
+        }
+
+        /// <summary>First root canvas in Screen Space Camera mode, otherwise any root canvas.</summary>
+        private static Canvas FindSceneCanvas()
+        {
+            Canvas fallback = null;
+            foreach (Canvas canvas in Object.FindObjectsByType<Canvas>(FindObjectsSortMode.None))
+            {
+                if (!canvas.isRootCanvas)
+                {
+                    continue;
+                }
+
+                if (canvas.renderMode == RenderMode.ScreenSpaceCamera)
+                {
+                    return canvas;
+                }
+
+                fallback ??= canvas;
+            }
+
+            return fallback;
         }
     }
 }
