@@ -32,6 +32,9 @@ namespace RottenEagle
         [Tooltip("Bind the camera depth-stencil while drawing UI so stencil Mask components work.")]
         [SerializeField] private bool supportStencilMasks = true;
 
+        [Tooltip("Also build the blur pyramid for cameras that render into a RenderTexture (minimaps, portals).")]
+        [SerializeField] private bool blurRenderTextureCameras;
+
         [SerializeField] private RenderPassEvent injectionPoint = RenderPassEvent.AfterRenderingPostProcessing;
 
         [SerializeField] [HideInInspector] private Shader pyramidShader;
@@ -60,7 +63,8 @@ namespace RottenEagle
             }
 
             pyramidPass.renderPassEvent = injectionPoint;
-            pyramidPass.Setup(pyramidMaterial, maxBlurLevels, referenceHeight, uiLayerMask, supportStencilMasks);
+            pyramidPass.Setup(pyramidMaterial, maxBlurLevels, referenceHeight, uiLayerMask, supportStencilMasks,
+                blurRenderTextureCameras);
             renderer.EnqueuePass(pyramidPass);
         }
 

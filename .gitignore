@@ -1,0 +1,6 @@
+# Package repository: only package content is tracked.
+.DS_Store
+Thumbs.db
+*.swp
+.vs/
+.idea/

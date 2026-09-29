@@ -77,7 +77,9 @@ namespace RottenEagle
         private float referenceHeight;
         private LayerMask uiLayerMask;
         private bool supportStencilMasks;
+        private bool blurRenderTextureCameras;
         private bool loggedDepthWarning;
+        private bool loggedMsaaWarning;
 
         private sealed class DrawPassData
         {
@@ -109,13 +111,15 @@ namespace RottenEagle
             int levels,
             float blurReferenceHeight,
             LayerMask layerMask,
-            bool useStencil)
+            bool useStencil,
+            bool includeRenderTextureCameras)
         {
             material = pyramidMaterial;
             maxBlurLevels = Mathf.Clamp(levels, 1, UiBlurFeature.MaxLevels);
             referenceHeight = Mathf.Max(1.0f, blurReferenceHeight);
             uiLayerMask = layerMask;
             supportStencilMasks = useStencil;
+            blurRenderTextureCameras = includeRenderTextureCameras;
         }
 
         public override void RecordRenderGraph(RenderGraph renderGraph, ContextContainer frameData)
@@ -151,9 +155,7 @@ namespace RottenEagle
             int levelCount = Mathf.Clamp(maxBlurLevels + Mathf.RoundToInt(resolutionLod), 1, UiBlurFeature.MaxLevels);
             var lodParams = new Vector4(resolutionLod, maxBlurLevels, levelCount, 0.0f);
 
-            // Scene View and other editor cameras draw UI without blur.
-            bool blurAllowed = material != null &&
-                               (cameraData.cameraType == CameraType.Game || cameraData.cameraType == CameraType.VR);
+            bool blurAllowed = IsBlurAllowed(cameraData, colorDesc);
 
             // One pyramid for all UI: UI drawn before a panel (in hierarchy order) is captured into the
             // pyramid, UI drawn after it is rejected inside the panel shape by the depth mark.
@@ -164,6 +166,38 @@ namespace RottenEagle
 
             AddDrawPass(renderGraph, renderingData, drawingSettings, colorTexture, depthTexture, blurredLevels,
                 screenParams, lodParams);
+        }
+
+        private bool IsBlurAllowed(UniversalCameraData cameraData, in TextureDesc colorDesc)
+        {
+            // Scene View and other editor cameras draw UI without blur.
+            if (material == null ||
+                (cameraData.cameraType != CameraType.Game && cameraData.cameraType != CameraType.VR))
+            {
+                return false;
+            }
+
+            // Minimap, portal and similar cameras rarely show blurred UI, skip their pyramid unless asked.
+            if (!blurRenderTextureCameras && cameraData.camera.targetTexture != null)
+            {
+                return false;
+            }
+
+            // Without post processing URP may still hold the multisampled color here; it cannot be sampled.
+            if (colorDesc.msaaSamples != MSAASamples.None)
+            {
+                if (!loggedMsaaWarning)
+                {
+                    loggedMsaaWarning = true;
+                    Debug.LogWarning("UiBlurFeature: the camera color is multisampled after post processing " +
+                                     "(MSAA with Post Processing off). UI is drawn without blur; enable Post " +
+                                     "Processing on the camera or disable MSAA.");
+                }
+
+                return false;
+            }
+
+            return true;
         }
 
         private TextureHandle GetStencilAttachment(

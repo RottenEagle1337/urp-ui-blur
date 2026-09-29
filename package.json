@@ -1,22 +1,27 @@
 {
   "name": "com.rotteneagle.urp-ui-blur",
-  "version": "2.0.0",
+  "version": "2.0.0-preview.1",
   "displayName": "URP UI Blur",
-  "description": "Layered, material based background blur for Screen Space Camera UI in URP (Render Graph, Dual Kawase).",
-  "unity": "6000.0",
+  "description": "Material based background blur for Screen Space Camera UI in URP (Render Graph), in the spirit of HDRP refraction: the renderer feature builds a blur pyramid of the frame, any UI graphic with the blur material samples it. Blur strength is a material property, panels blur the UI drawn before them in the hierarchy of one canvas, no components or sorting layers.",
+  "unity": "6000.3",
+  "license": "Unlicense",
+  "author": {
+    "name": "RottenEagle",
+    "url": "https://github.com/RottenEagle1337"
+  },
+  "documentationUrl": "https://github.com/RottenEagle1337/urp-ui-blur#readme",
+  "changelogUrl": "https://github.com/RottenEagle1337/urp-ui-blur/blob/main/CHANGELOG.md",
+  "licensesUrl": "https://github.com/RottenEagle1337/urp-ui-blur/blob/main/LICENSE.md",
   "dependencies": {
-    "com.unity.render-pipelines.universal": "17.0.0",
+    "com.unity.render-pipelines.universal": "17.3.0",
     "com.unity.ugui": "2.0.0"
   },
   "keywords": [
     "urp",
     "blur",
     "ui",
-    "kawase",
-    "dual-kawase",
+    "ugui",
+    "frosted-glass",
     "render-graph"
-  ],
-  "author": {
-    "name": "RottenEagle"
-  }
+  ]
 }
